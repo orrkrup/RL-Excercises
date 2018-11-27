@@ -5,6 +5,9 @@ import torch
 from torch import nn
 import copy
 import gym
+from visdom import Visdom
+import torch.nn.functional as F
+import datetime
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -23,23 +26,73 @@ class TwoLayerDQN(nn.Module):
 
 
 class DQNLoss(object):
-    def __init__(self, net):
-        self.net = copy.deepcopy(net)
+    def __init__(self, net, er, gamma, mbatch_size, obs_dim):
+        self.target_net = copy.deepcopy(net)
+        self.er = er
+        self.gamma = gamma
+        self.batch_size = mbatch_size
+        self.obs_dim = obs_dim
+        self.l = F.smooth_l1_loss
 
-    def calc_loss(self):
-        # TODO: implement DQN loss
-        pass
+    def update_target(self, net):
+        self.target_net = copy.deepcopy(net)
+
+    def calc_loss(self, net):
+        b_inds = torch.randperm(len(self.er))[:self.batch_size]
+        minibatch = self.er[b_inds]
+        mb_s, mb_a, mb_r, mb_st, mb_t = [torch.LongTensor(a) for a in zip(*minibatch)]
+        mb_s = make_state(self.obs_dim, mb_s)
+        mb_st = make_state(self.obs_dim, mb_st)
+        with torch.no_grad():
+            y = mb_r.float() + self.gamma * torch.max(self.target_net(mb_st), dim=-1)[0] * mb_t.float()
+        Q = net(mb_s).gather(1, mb_a.unsqueeze(-1)).squeeze()
+        return self.l(Q, y)
 
 
-class ExpereinceReplay(object):
+class ExperienceReplay(object):
     def __init__(self, max_size):
-        self.len = max_size
+        self.size = max_size
         self.q = []
 
     def push(self, obj):
         self.q.insert(0, obj)
-        if len(self.q) > self.len:
-            q.pop()
+        if len(self.q) > self.size:
+            self.q.pop()
+
+    def __len__(self):
+        return len(self.q)
+
+    def __getitem__(self, item):
+        return [self.q[i] for i in item]
+
+
+def make_state(obs_dim, inds):
+    v = torch.zeros((len(inds), obs_dim))
+    v[list(range(len(inds))), inds] = 1.0
+    return v
+
+
+def eval_model(model, env):
+    model.eval()
+    eps = 0.01
+    episodes = 100
+    cr = 0
+    for ep in range(episodes):
+        obs = env.reset()
+        done = False
+        while not done:
+            if torch.rand(()) > eps:
+                v_obs = make_state(env.observation_space.n, [obs])
+                act = torch.argmax(model(v_obs)).item()
+            else:
+                act = env.action_space.sample()
+
+            obs, r, done, _ = env.step(act)
+            cr += r
+
+    avg_r = cr * 1.0 / episodes
+    model.train()
+    return avg_r
 
 
 def train_model(opts):
@@ -48,38 +101,76 @@ def train_model(opts):
     env = gym.make('Taxi-v2')
 
     # Initialize Experience Reply
-    er = ExpereinceReplay(opts['max_er'])
+    er = ExperienceReplay(opts['max_er'])
 
     # Initizlize Model, loss function and optimizer
     net = TwoLayerDQN(env.observation_space.n, opts['net_h_dim'], env.action_space.n)
-    loss_func = DQNLoss(net).calc_loss
-    opt = torch.optim.Adam(net.parameters())
+    loss_obj = DQNLoss(net, er, opts['gamma'], opts['minibatch_size'], env.observation_space.n)
+    loss_func = loss_obj.calc_loss
+    opt = torch.optim.Adam(net.parameters(), lr=opts['lr'])
 
     # Initialize other parameters:
     eps = opts['eps0']
+    step_counter = 0
+    eval_rewards = []
+    vis = Visdom(env='dqn_taxi')
     for e in range(opts['episodes']):
         obs = env.reset()
         done = False
+        cr = 0
         while not done:
-            env.render()
+            step_counter += 1
+            # env.render()
             last_obs = obs
 
-            # w. p. epsilon:
-            # act = torch.argmax(net(obs))
-            # else
-            act = env.action_space.sample()
-            obs, r, done, _ = env.step(act)
-            er.push((last_obs, act, r, obs))
+            if torch.rand(()) > eps:
+                v_obs = make_state(env.observation_space.n, [obs])
+                act = torch.argmax(net(v_obs)).item()
+            else:
+                act = env.action_space.sample()
 
+            obs, r, done, _ = env.step(act)
+            cr += r
+            if not(done and r < 0):
+                er.push((last_obs, act, r, obs, 0 if done else 1))
+
+            if step_counter > opts['learn_start_steps']:
+                if eps > opts['eps_end']:
+                    eps *= opts['eps_decay']
+                opt.zero_grad()
+                loss = loss_func(net)
+                loss.backward()
+                opt.step()
+
+                if not step_counter % opts['targ_update_steps']:
+                    loss_obj.update_target(net)
+
+                if not step_counter % opts['eval_steps']:
+                    eval_rewards.append(eval_model(net, env))
+                    d = dict(title='Evaluated Reward', xlabel='Evaluation Epochs', ylabel='Average Reward')
+                    x = list(range(1, len(eval_rewards) + 1))
+                    vis.line(Y=eval_rewards, X=x, win='eval_r', opts=d)
+
+        print("Episode {} done. Reward: {}".format(e, cr))
+
+    torch.save(net.state_dict(), opts['save_path'])
 
 if __name__ == '__main__':
 
     # parse args
     opts = {
-        'episodes': 20,
-        'max_er': 1e4,
+        'episodes': 10000,
+        'max_er': 20000,
         'net_h_dim': 64,
         'eps0': 1,
-        'eps_decay': 0.99,
+        'gamma': 0.99,
+        'eps_decay': 0.999,
+        'eps_end': 0.1,
+        'targ_update_steps': 600,
+        'learn_start_steps': 1e4,
+        'lr': 0.002,
+        'minibatch_size': 256,
+        'eval_steps': 1e3,
+        'save_path': './results/model_' + datetime.datetime.now().strftime('%Y%m%d_%H%M')
     }
     train_model(opts)

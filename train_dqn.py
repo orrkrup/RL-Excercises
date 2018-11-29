@@ -74,23 +74,28 @@ class ExperienceReplay(object):
 
 
 def decode(i):
-    a = (torch.fmod(i, 4)).long()
+    a = to_categorical((torch.fmod(i, 4)).long(), 4)
     i = torch.div(i, 4).long()
-    b = (torch.fmod(i, 5))
+    b = to_categorical((torch.fmod(i, 5)), 5)
     i = torch.div(i, 5).long()
-    c = (torch.fmod(i, 5))
+    c = to_categorical((torch.fmod(i, 5)), 5)
     i = torch.div(i, 5).long()
-    d = (i)
+    d = to_categorical(i, 5)
     # assert 0 <= i < 5
-    return torch.stack([d, c, b, a], dim=1).float()
+    return torch.cat([d, c, b, a], dim=1).float()
+
+
+def to_categorical(inds, dim):
+    v = torch.zeros((len(inds), dim))
+    v[list(range(len(inds))), inds] = 1.0
+    return v
 
 
 def make_state(obs_dim, inds):
-    if 4 == obs_dim:
+    if 19 == obs_dim:
         v = decode(inds)
     else:
-        v = torch.zeros((len(inds), obs_dim))
-        v[list(range(len(inds))), inds] = 1.0
+        v = to_categorical(inds, obs_dim)
     return v
 
 
@@ -126,7 +131,7 @@ def train_model(opts):
     er = ExperienceReplay(opts['max_er'])
 
     if opts['dense_obs']:
-        obs_dim = 4
+        obs_dim = 19
     else:
         obs_dim = env.observation_space.n
 
@@ -202,11 +207,11 @@ if __name__ == '__main__':
         'l1_reg': 0,
         'eval_steps': 50,
         'save_path': './results/model_' + datetime.datetime.now().strftime('%Y%m%d_%H%M'),
-        'dense_obs': False
+        'dense_obs': True
     }
     vis = Visdom(env='dqn_taxi')
 
-    hidden_sizes = [32]
+    hidden_sizes = [64]
     for val in hidden_sizes:
         opts['net_h_dim'] = val
         st = time.time()

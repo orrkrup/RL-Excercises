@@ -8,17 +8,22 @@ import gym
 from visdom import Visdom
 import torch.nn.functional as F
 import datetime
+import time
+from tqdm import trange
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
+
 class TwoLayerDQN(nn.Module):
-    def __init__(self, in_dim, h_dim, act_dim):
+    def __init__(self, in_dim, h_dim, act_dim, dropout=0):
         super(TwoLayerDQN, self).__init__()
         self.net = nn.Sequential(
             nn.Linear(in_dim, h_dim),
+            nn.Dropout(p=dropout),
             nn.ReLU(),
-            nn.Linear(h_dim, act_dim)
+            nn.Linear(h_dim, act_dim),
+            nn.Dropout(p=dropout)
         )
 
     def forward(self, x_in):
@@ -26,13 +31,14 @@ class TwoLayerDQN(nn.Module):
 
 
 class DQNLoss(object):
-    def __init__(self, net, er, gamma, mbatch_size, obs_dim):
+    def __init__(self, net, er, gamma, mbatch_size, obs_dim, l1_reg=0):
         self.target_net = copy.deepcopy(net)
         self.er = er
         self.gamma = gamma
         self.batch_size = mbatch_size
         self.obs_dim = obs_dim
         self.l = F.smooth_l1_loss
+        self.l1_reg = l1_reg
 
     def update_target(self, net):
         self.target_net = copy.deepcopy(net)
@@ -46,7 +52,8 @@ class DQNLoss(object):
         with torch.no_grad():
             y = mb_r.float() + self.gamma * torch.max(self.target_net(mb_st), dim=-1)[0] * mb_t.float()
         Q = net(mb_s).gather(1, mb_a.unsqueeze(-1)).squeeze()
-        return self.l(Q, y)
+        l1_norm = torch.sum(torch.Tensor([torch.sum(torch.abs(param)) for param in net.parameters()]))
+        return self.l(Q, y) + self.l1_reg * l1_norm
 
 
 class ExperienceReplay(object):
@@ -66,23 +73,38 @@ class ExperienceReplay(object):
         return [self.q[i] for i in item]
 
 
+def decode(i):
+    a = (torch.fmod(i, 4)).long()
+    i = torch.div(i, 4).long()
+    b = (torch.fmod(i, 5))
+    i = torch.div(i, 5).long()
+    c = (torch.fmod(i, 5))
+    i = torch.div(i, 5).long()
+    d = (i)
+    # assert 0 <= i < 5
+    return torch.stack([d, c, b, a], dim=1).float()
+
+
 def make_state(obs_dim, inds):
-    v = torch.zeros((len(inds), obs_dim))
-    v[list(range(len(inds))), inds] = 1.0
+    if 4 == obs_dim:
+        v = decode(inds)
+    else:
+        v = torch.zeros((len(inds), obs_dim))
+        v[list(range(len(inds))), inds] = 1.0
     return v
 
 
-def eval_model(model, env):
+def eval_model(model, obs_dim, env):
     model.eval()
     eps = 0.01
-    episodes = 100
+    episodes = 20
     cr = 0
     for ep in range(episodes):
         obs = env.reset()
         done = False
         while not done:
             if torch.rand(()) > eps:
-                v_obs = make_state(env.observation_space.n, [obs])
+                v_obs = make_state(obs_dim, torch.LongTensor([obs]))
                 act = torch.argmax(model(v_obs)).item()
             else:
                 act = env.action_space.sample()
@@ -103,9 +125,14 @@ def train_model(opts):
     # Initialize Experience Reply
     er = ExperienceReplay(opts['max_er'])
 
+    if opts['dense_obs']:
+        obs_dim = 4
+    else:
+        obs_dim = env.observation_space.n
+
     # Initizlize Model, loss function and optimizer
-    net = TwoLayerDQN(env.observation_space.n, opts['net_h_dim'], env.action_space.n)
-    loss_obj = DQNLoss(net, er, opts['gamma'], opts['minibatch_size'], env.observation_space.n)
+    net = TwoLayerDQN(obs_dim, opts['net_h_dim'], env.action_space.n, opts['dropout'])
+    loss_obj = DQNLoss(net, er, opts['gamma'], opts['minibatch_size'], obs_dim, opts['l1_reg'])
     loss_func = loss_obj.calc_loss
     opt = torch.optim.Adam(net.parameters(), lr=opts['lr'])
 
@@ -113,8 +140,8 @@ def train_model(opts):
     eps = opts['eps0']
     step_counter = 0
     eval_rewards = []
-    vis = Visdom(env='dqn_taxi')
-    for e in range(opts['episodes']):
+    # vis = Visdom(env='dqn_taxi')
+    for e in trange(opts['episodes']):
         obs = env.reset()
         done = False
         cr = 0
@@ -124,7 +151,7 @@ def train_model(opts):
             last_obs = obs
 
             if torch.rand(()) > eps:
-                v_obs = make_state(env.observation_space.n, [obs])
+                v_obs = make_state(obs_dim, torch.LongTensor([obs]))
                 act = torch.argmax(net(v_obs)).item()
             else:
                 act = env.action_space.sample()
@@ -145,21 +172,22 @@ def train_model(opts):
                 if not step_counter % opts['targ_update_steps']:
                     loss_obj.update_target(net)
 
-                if not step_counter % opts['eval_steps']:
-                    eval_rewards.append(eval_model(net, env))
-                    d = dict(title='Evaluated Reward', xlabel='Evaluation Epochs', ylabel='Average Reward')
-                    x = list(range(1, len(eval_rewards) + 1))
-                    vis.line(Y=eval_rewards, X=x, win='eval_r', opts=d)
+        if not e % opts['eval_steps']:
+            eval_rewards.append(eval_model(net, obs_dim, env))
+            # d = dict(title='Evaluated Reward', xlabel='Evaluation Epochs', ylabel='Average Reward')
+            # x = list(range(1, len(eval_rewards) + 1))
+            # vis.line(Y=eval_rewards, X=x, win='eval_r', opts=d, update='append')
 
         print("Episode {} done. Reward: {}".format(e, cr))
 
-    torch.save(net.state_dict(), opts['save_path'])
+    # torch.save(net.state_dict(), opts['save_path'])
+    return eval_rewards
+
 
 if __name__ == '__main__':
-
     # parse args
     opts = {
-        'episodes': 10000,
+        'episodes': 3500,
         'max_er': 20000,
         'net_h_dim': 64,
         'eps0': 1,
@@ -170,7 +198,25 @@ if __name__ == '__main__':
         'learn_start_steps': 1e4,
         'lr': 0.002,
         'minibatch_size': 256,
-        'eval_steps': 1e3,
-        'save_path': './results/model_' + datetime.datetime.now().strftime('%Y%m%d_%H%M')
+        'dropout': 0,
+        'l1_reg': 0,
+        'eval_steps': 50,
+        'save_path': './results/model_' + datetime.datetime.now().strftime('%Y%m%d_%H%M'),
+        'dense_obs': False
     }
-    train_model(opts)
+    vis = Visdom(env='dqn_taxi')
+
+    hidden_sizes = [32]
+    for val in hidden_sizes:
+        opts['net_h_dim'] = val
+        st = time.time()
+        eval_rewards = train_model(opts)
+
+        d = dict(title='Evaluated Reward', xlabel='Evaluation Epochs', ylabel='Average Reward')
+        x = list(range(1, len(eval_rewards) + 1))
+        vis.line(Y=eval_rewards, X=x, win='eval_r', opts=d, update='append', name=str(val))
+
+        et = time.time() - st
+        print('Done with hidden dim {}. Took {} seconds'.format(val, et))
+
+    vis.update_window_opts(win='eval_r', opts=dict(legend=[str(s) for s in hidden_sizes]))

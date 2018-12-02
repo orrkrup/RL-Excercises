@@ -13,23 +13,28 @@ from tqdm import trange
 import matplotlib.pyplot as plt
 import scipy.stats as stats
 import numpy as np
+import torchvision.transforms as T
+from PIL import Image
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
-class TwoLayerDQN(nn.Module):
-    def __init__(self, in_dim, h_dim, act_dim, dropout=0):
-        super(TwoLayerDQN, self).__init__()
-        self.net = nn.Sequential(
-            nn.Linear(in_dim, h_dim),
-            nn.Dropout(p=dropout),
-            nn.ReLU(),
-            nn.Linear(h_dim, act_dim),
-            nn.Dropout(p=dropout)
-        )
+class ConvolutionalDQN(nn.Module):
+    def __init__(self, act_dim, dropout=0):
+        super(ConvolutionalDQN, self).__init__()
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=5, stride=2)
+        self.bn1 = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=5, stride=2)
+        self.bn2 = nn.BatchNorm2d(32)
+        self.conv3 = nn.Conv2d(32, 32, kernel_size=5, stride=2)
+        self.bn3 = nn.BatchNorm2d(32)
+        self.head = nn.Linear(448, act_dim)
 
-    def forward(self, x_in):
-        return self.net(x_in)
+    def forward(self, x):
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x)))
+        return self.head(x.view(x.size(0), -1))
 
 
 class DQNLoss(object):
@@ -75,16 +80,18 @@ class ExperienceReplay(object):
         return [self.q[i] for i in item]
 
 
-def decode(i):
-    a = to_categorical((torch.fmod(i, 4)).long(), 4)
-    i = torch.div(i, 4).long()
-    b = to_categorical((torch.fmod(i, 5)), 5)
-    i = torch.div(i, 5).long()
-    c = to_categorical((torch.fmod(i, 5)), 5)
-    i = torch.div(i, 5).long()
-    d = to_categorical(i, 5)
-    # assert 0 <= i < 5
-    return torch.cat([d, c, b, a], dim=1).float()
+def get_screen(env):
+    screen = env.render(mode='rgb_array').transpose(
+        (2, 0, 1))  # transpose into torch order (CHW)
+    # Convert to float, rescale, convert to torch tensor
+    # (this doesn't require a copy)
+    screen = np.ascontiguousarray(screen, dtype=np.float32) / 255
+    screen = torch.from_numpy(screen)
+    # Resize, and add a batch dimension (BCHW)
+    resize = T.Compose([T.ToPILImage(),
+                        T.Resize(40, interpolation=Image.CUBIC),
+                        T.ToTensor()])
+    return resize(screen).unsqueeze(0).to(device)
 
 
 def to_categorical(inds, dim):
@@ -94,10 +101,7 @@ def to_categorical(inds, dim):
 
 
 def make_state(obs_dim, inds):
-    if 19 == obs_dim:
-        v = decode(inds)
-    else:
-        v = to_categorical(inds, obs_dim)
+    v = to_categorical(inds, obs_dim)
     return v
 
 
@@ -107,16 +111,27 @@ def eval_model(model, obs_dim, env):
     episodes = 20
     cr = 0
     for ep in range(episodes):
-        obs = env.reset()
+        _ = env.reset()
+        last_screen = get_screen(env)
+        current_screen = get_screen(env)
+        obs = current_screen - last_screen
+
         done = False
         while not done:
             if torch.rand(()) > eps:
-                v_obs = make_state(obs_dim, torch.LongTensor([obs]))
-                act = torch.argmax(model(v_obs)).item()
+                act = torch.argmax(model(obs)).item()
             else:
                 act = env.action_space.sample()
 
-            obs, r, done, _ = env.step(act)
+            _, r, done, _ = env.step(act)
+
+            last_screen = current_screen
+            current_screen = get_screen(env)
+            if not done:
+                obs = current_screen - last_screen
+            else:
+                obs = None
+
             cr += r
 
     avg_r = cr * 1.0 / episodes
@@ -126,18 +141,18 @@ def eval_model(model, obs_dim, env):
 
 def train_model(opts):
     # Initialize Environment
-    env = gym.make('Taxi-v2')
+    env = gym.make('Acrobot-v1')
 
     # Initialize Experience Reply
     er = ExperienceReplay(opts['max_er'])
 
     if opts['dense_obs']:
-        obs_dim = 19
+        print('No dense representation')
     else:
-        obs_dim = env.observation_space.n
+        obs_dim = None
 
     # Initizlize Model, loss function and optimizer
-    net = TwoLayerDQN(obs_dim, opts['net_h_dim'], env.action_space.n, opts['dropout'])
+    net = ConvolutionalDQN(env.action_space.n, opts['dropout']).to(device)
     loss_obj = DQNLoss(net, er, opts['gamma'], opts['minibatch_size'], obs_dim, opts['l1_reg'])
     loss_func = loss_obj.calc_loss
     opt = torch.optim.Adam(net.parameters(), lr=opts['lr'])
@@ -148,7 +163,11 @@ def train_model(opts):
     eval_rewards = []
     # vis = Visdom(env='dqn_taxi')
     for e in trange(opts['episodes']):
-        obs = env.reset()
+        env.reset()
+        last_screen = get_screen(env)
+        current_screen = get_screen(env)
+        obs = current_screen - last_screen
+
         done = False
         cr = 0
         while not done:
@@ -162,8 +181,16 @@ def train_model(opts):
             else:
                 act = env.action_space.sample()
 
-            obs, r, done, _ = env.step(act)
+            _, r, done, _ = env.step(act)
             cr += r
+
+            last_screen = current_screen
+            current_screen = get_screen(env)
+            if not done:
+                obs = current_screen - last_screen
+            else:
+                obs = None
+
             if not (done and r < 0):
                 er.push((last_obs, act, r, obs, 0 if done else 1))
 
@@ -221,8 +248,8 @@ if __name__ == '__main__':
         'l1_reg': 0,
         'eval_steps': 50,
         'save_path': './results/model_' + datetime.datetime.now().strftime('%Y%m%d_%H%M'),
-        'dense_obs': True,
-        'number_of_runs': 10
+        'dense_obs': False,
+        'number_of_runs': 1
     }
     vis = Visdom(env='dqn_taxi')
 

@@ -22,18 +22,21 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 class ConvolutionalDQN(nn.Module):
     def __init__(self, act_dim, dropout=0):
         super(ConvolutionalDQN, self).__init__()
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=5, stride=2)
-        self.bn1 = nn.BatchNorm2d(16)
-        self.conv2 = nn.Conv2d(16, 32, kernel_size=5, stride=2)
-        self.bn2 = nn.BatchNorm2d(32)
-        self.conv3 = nn.Conv2d(32, 32, kernel_size=5, stride=2)
-        self.bn3 = nn.BatchNorm2d(32)
-        self.head = nn.Linear(448, act_dim)
+        self.net = nn.Sequential(
+            nn.Conv2d(4, 16, kernel_size=5, stride=2),
+            # nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=5, stride=2),
+            # nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=5, stride=2),
+            # nn.BatchNorm2d(32),
+            nn.ReLU(),
+        )
+        self.head = nn.Linear(128, act_dim)
 
     def forward(self, x):
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
+        x = self.net(x)
         return self.head(x.view(x.size(0), -1))
 
 
@@ -51,27 +54,48 @@ class DQNLoss(object):
         self.target_net = copy.deepcopy(net)
 
     def calc_loss(self, net):
-        b_inds = torch.randperm(len(self.er))[:self.batch_size]
-        minibatch = self.er[b_inds]
-        mb_s, mb_a, mb_r, mb_st, mb_t = [torch.LongTensor(a) for a in zip(*minibatch)]
-        mb_s = make_state(self.obs_dim, mb_s)
-        mb_st = make_state(self.obs_dim, mb_st)
+        minibatch = self.er.sample(self.batch_size)
+        mb_s, mb_a, mb_r, mb_st, mb_t = zip(*minibatch)
+        mb_s = torch.cat(mb_s, dim=0)
+        mb_st = torch.cat(mb_st, dim=0)
+        mb_t = torch.Tensor(mb_t).to(device)
+        mb_a = torch.LongTensor(mb_a).to(device)
+        mb_r = torch.Tensor(mb_r).to(device)
         with torch.no_grad():
             y = mb_r.float() + self.gamma * torch.max(self.target_net(mb_st), dim=-1)[0] * mb_t.float()
         Q = net(mb_s).gather(1, mb_a.unsqueeze(-1)).squeeze()
-        l1_norm = torch.sum(torch.Tensor([torch.sum(torch.abs(param)) for param in net.parameters()]))
+        l1_norm = torch.sum(torch.Tensor([torch.sum(torch.abs(param)) for param in net.parameters()]).to(device))
         return self.l(Q, y) + self.l1_reg * l1_norm
 
 
 class ExperienceReplay(object):
-    def __init__(self, max_size):
+    def __init__(self, max_size, success=False, suc_pr=0.5):
         self.size = max_size
         self.q = []
+        if success:
+            self.suc_mem = ExperienceReplay(int(0.1 * max_size))
+            self.suc_pr = suc_pr
+        else:
+            self.suc_mem = None
 
-    def push(self, obj):
+    def push(self, obj, suc=False, suc_len=100):
         self.q.insert(0, obj)
         if len(self.q) > self.size:
             self.q.pop()
+        if suc:
+            self.suc_mem.push_batch_(self.q[:suc_len])
+
+    def push_batch_(self, b):
+        self.q = b + self.q
+        if len(self.q) > self.size:
+            self.q = self.q[:self.size]
+
+    def sample(self, b_size):
+        if self.suc_mem is None or len(self.suc_mem) < b_size or torch.rand(()) > self.suc_pr:
+            b_inds = torch.randperm(len(self))[:b_size]
+            return self[b_inds]
+        else:
+            return self.suc_mem.sample(b_size)
 
     def __len__(self):
         return len(self.q)
@@ -89,6 +113,7 @@ def get_screen(env):
     screen = torch.from_numpy(screen)
     # Resize, and add a batch dimension (BCHW)
     resize = T.Compose([T.ToPILImage(),
+                        T.Grayscale(),
                         T.Resize(40, interpolation=Image.CUBIC),
                         T.ToTensor()])
     return resize(screen).unsqueeze(0).to(device)
@@ -100,42 +125,45 @@ def to_categorical(inds, dim):
     return v
 
 
-def make_state(obs_dim, inds):
-    v = to_categorical(inds, obs_dim)
-    return v
-
-
 def eval_model(model, obs_dim, env):
+    print("Evaluating model...")
     model.eval()
-    eps = 0.01
-    episodes = 20
+    eps = 0.05
+    eval_steps = 1000
     cr = 0
-    for ep in range(episodes):
-        _ = env.reset()
-        last_screen = get_screen(env)
-        current_screen = get_screen(env)
-        obs = current_screen - last_screen
 
-        done = False
-        while not done:
-            if torch.rand(()) > eps:
-                act = torch.argmax(model(obs)).item()
-            else:
-                act = env.action_space.sample()
+    env.reset()
+    # last_screen = get_screen(env)
+    # current_screen = get_screen(env)
+    # obs = current_screen - last_screen
+    s = 1 - get_screen(env)
+    obs = torch.cat([s for _ in range(opts['hist_len'])], dim=1)
 
-            _, r, done, _ = env.step(act)
+    for _ in range(eval_steps):
+        if torch.rand(()) > eps:
+            act = torch.argmax(model(obs)).item()
+        else:
+            act = env.action_space.sample()
 
-            last_screen = current_screen
-            current_screen = get_screen(env)
-            if not done:
-                obs = current_screen - last_screen
-            else:
-                obs = None
+        _, r, done, _ = env.step(act)
 
-            cr += r
+        # last_screen = current_screen
+        # current_screen = get_screen(env)
+        # obs = current_screen - last_screen
+        obs = torch.cat([obs[:, 1:, :, :], 1 - get_screen(env)], dim=1)
 
-    avg_r = cr * 1.0 / episodes
+        if done:
+            env.reset()
+            # last_screen = get_screen(env)
+            # current_screen = get_screen(env)
+            s = 1 - get_screen(env)
+            obs = torch.cat([s for _ in range(opts['hist_len'])], dim=1)
+
+        cr += r
+
+    avg_r = cr
     model.train()
+    print("Evaluation done.")
     return avg_r
 
 
@@ -144,7 +172,7 @@ def train_model(opts):
     env = gym.make('Acrobot-v1')
 
     # Initialize Experience Reply
-    er = ExperienceReplay(opts['max_er'])
+    er = ExperienceReplay(opts['max_er'], success=opts['success_exp_replay'])
 
     if opts['dense_obs']:
         print('No dense representation')
@@ -161,55 +189,69 @@ def train_model(opts):
     eps = opts['eps0']
     step_counter = 0
     eval_rewards = []
-    # vis = Visdom(env='dqn_taxi')
-    for e in trange(opts['episodes']):
+    vis = Visdom(env='dqn_acrobot')
+    t = trange(opts['episodes'])
+    declared = False
+    eps_delta = (opts['eps0'] - opts['eps_end']) / opts['eps_decay_steps']
+    loss_c = []
+    for e in t:
         env.reset()
-        last_screen = get_screen(env)
-        current_screen = get_screen(env)
-        obs = current_screen - last_screen
+        # last_screen = get_screen(env)
+        # current_screen = get_screen(env)
+        # obs = current_screen - last_screen
+        s = 1 - get_screen(env)
+        obs = torch.cat([s for _ in range(opts['hist_len'])], dim=1)
 
         done = False
         cr = 0
+        ep_start = step_counter
         while not done:
             step_counter += 1
             # env.render()
             last_obs = obs
 
             if torch.rand(()) > eps:
-                v_obs = make_state(obs_dim, torch.LongTensor([obs]))
-                act = torch.argmax(net(v_obs)).item()
+                act = torch.argmax(net(obs)).item()
             else:
                 act = env.action_space.sample()
 
             _, r, done, _ = env.step(act)
             cr += r
 
-            last_screen = current_screen
-            current_screen = get_screen(env)
-            if not done:
-                obs = current_screen - last_screen
-            else:
-                obs = None
+            # last_screen = current_screen
+            # current_screen = get_screen(env)
+            # obs = current_screen - last_screen
+            obs = torch.cat([obs[:, 1:, :, :], 1 - get_screen(env)], dim=1)
+            # vis.image(torch.cat([obs[:, i, :, :] for i in range(4)], dim=-2), win='observation')
 
             if not (done and r < 0):
-                er.push((last_obs, act, r, obs, 0 if done else 1))
+                er.push((last_obs, act, r, obs, 0 if done else 1), suc=(r > -1),
+                        suc_len=min(step_counter - ep_start, opts['max_suc_len']))
 
             if step_counter > opts['learn_start_steps']:
+                if not declared:
+                    print("Learning started")
+                    declared = True
                 if eps > opts['eps_end']:
-                    eps *= opts['eps_decay']
+                    eps -= eps_delta
                 opt.zero_grad()
                 loss = loss_func(net)
+                loss_c.append(loss.item())
                 loss.backward()
                 opt.step()
+
+                # vis.line(Y=loss_c, X=list(range(len(loss_c))), win='loss', opts=dict(title='DQN Loss'))
 
                 if not step_counter % opts['targ_update_steps']:
                     loss_obj.update_target(net)
 
-        if not e % opts['eval_steps']:
+        t.set_description('Reward: {}'.format(cr))
+
+        if (not e % opts['eval_e_freq']) and step_counter > opts['learn_start_steps']:
             eval_rewards.append(eval_model(net, obs_dim, env))
-            # d = dict(title='Evaluated Reward', xlabel='Evaluation Epochs', ylabel='Average Reward')
-            # x = list(range(1, len(eval_rewards) + 1))
-            # vis.line(Y=eval_rewards, X=x, win='eval_r', opts=d, update='append')
+            d = dict(title='Evaluated Reward', xlabel='Evaluation Epochs', ylabel='Average Reward')
+            x = list(range(1, len(eval_rewards) + 1))
+            vis.line(Y=eval_rewards, X=x, win='eval_r', opts=d)
 
         # print("Episode {} done. Reward: {}".format(e, cr))
 
@@ -234,22 +276,25 @@ if __name__ == '__main__':
     # parse args
     opts = {
         'episodes': 3500,
-        'max_er': 20000,
+        'max_er': 2e5,
         'net_h_dim': 64,
         'eps0': 1,
         'gamma': 0.99,
-        'eps_decay': 0.999,
-        'eps_end': 0.1,
-        'targ_update_steps': 600,
+        'eps_decay_steps': 5e5,
+        'eps_end': 0.05,
+        'targ_update_steps': 1e3,
         'learn_start_steps': 1e4,
-        'lr': 0.002,
-        'minibatch_size': 256,
+        'lr': 0.001,
+        'minibatch_size': 64,
         'dropout': 0,
         'l1_reg': 0,
-        'eval_steps': 50,
+        'eval_e_freq': 20,
         'save_path': './results/model_' + datetime.datetime.now().strftime('%Y%m%d_%H%M'),
         'dense_obs': False,
-        'number_of_runs': 1
+        'number_of_runs': 1,
+        'success_exp_replay': True,
+        'max_suc_len': 100,
+        'hist_len': 4
     }
     vis = Visdom(env='dqn_taxi')
 
@@ -263,7 +308,7 @@ if __name__ == '__main__':
 
         d = dict(title='Evaluated Reward', xlabel='Evaluation Epochs', ylabel='Average Reward')
         x = list(range(1, len(eval_rewards) + 1))
-        vis.line(Y=eval_rewards, X=x, win='eval_r', opts=d, update='append', name=str(val))
+        vis.line(Y=eval_rewards, X=x, win='eval_r_final', opts=d, update='append', name=str(val))
 
         et = time.time() - st
         print('Run number {}. Took {} seconds'.format(val, et))

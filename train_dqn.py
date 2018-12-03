@@ -13,6 +13,7 @@ from tqdm import trange
 import matplotlib.pyplot as plt
 import scipy.stats as stats
 import numpy as np
+import os
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -140,7 +141,13 @@ def train_model(opts):
     net = TwoLayerDQN(obs_dim, opts['net_h_dim'], env.action_space.n, opts['dropout'])
     loss_obj = DQNLoss(net, er, opts['gamma'], opts['minibatch_size'], obs_dim, opts['l1_reg'])
     loss_func = loss_obj.calc_loss
+
     opt = torch.optim.Adam(net.parameters(), lr=opts['lr'])
+    if opts['optimizer'] == 'RMSprop':
+        opt = torch.optim.RMSprop(net.parameters(), lr=opts['lr'])
+    elif opts['optimizer'] == 'Adamax':
+        opt = torch.optim.Adamax(net.parameters(), lr=opts['lr'])
+
 
     # Initialize other parameters:
     eps = opts['eps0']
@@ -186,11 +193,11 @@ def train_model(opts):
 
         # print("Episode {} done. Reward: {}".format(e, cr))
 
-    # torch.save(net.state_dict(), opts['save_path'])
+    torch.save(net.state_dict(), opts['save_path'])
     return eval_rewards
 
 
-def lineplotCI(line, line_lb, line_ub):
+def lineplotCI(line, line_lb, line_ub, name):
     # plot the data
     x = range(1, line.shape[0] + 1)
     plt.figure(1)
@@ -198,17 +205,60 @@ def lineplotCI(line, line_lb, line_ub):
     if line_ub is not None and line_lb is not None:
         plt.fill_between(np.array(x), np.array(line_ub), np.array(line_lb), alpha=.5)
     # plot the mean on top
-    plt.plot(np.array(x), np.array(line))
+    plt.plot(np.array(x), np.array(line), label=name)
     plt.grid()
-    plt.show()
+    plt.title('Taxi-v2 Reward over Evaluation Epochs')
+    plt.xlabel('Evaluation Epochs')
+    plt.ylabel('Reward')
+    plt.ylim((-300, 40))
+
+
+
+def load_and_plot(filename):
+    opts, runs = torch.load(filename)
+    vis = Visdom(env='dqn_taxi')
+
+    # zeros = torch.zeros(runs.shape)
+    # smooth_runs = [torch.cat((zeros[:, -n:], runs[:, :-n]), dim=1).unsqueeze(-1) for n in range(1, 10)]
+    # smooth_runs = torch.mean(torch.cat([runs.unsqueeze(-1)] + smooth_runs,dim=-1), dim=-1)
+
+    line_lb = []
+    line_ub = []
+    # line_lbs = []
+    # line_ubs = []
+    if len(runs.shape) != 1:
+        for ind in range(runs.shape[1]):
+            min_line, max_line = stats.t.interval(0.95, len(runs[:, ind]) - 1,
+                                                  loc=torch.mean(runs[:, ind]),
+                                                  scale=stats.sem(runs[:, ind]))
+            line_lb.append(min_line)
+            line_ub.append(max_line)
+        lineplotCI(line=torch.mean(runs, dim=0), line_lb=line_lb, line_ub=line_ub, name=filename[:-4])
+        # for ind in range(smooth_runs.shape[1]):
+        #     min_line, max_line = stats.t.interval(0.95, len(smooth_runs[:, ind]) - 1,
+        #                                           loc=torch.mean(smooth_runs[:, ind]),
+        #                                           scale=stats.sem(smooth_runs[:, ind]))
+        #     line_lbs.append(min_line)
+        #     line_ubs.append(max_line)
+        # lineplotCI(line=torch.mean(smooth_runs, dim=0), line_lb=line_lbs, line_ub=line_ubs)
+    # vis.update_window_opts(win='eval_r', opts=dict(legend=[str(s) for s in hidden_sizes]))
 
 
 if __name__ == '__main__':
+    # dirlist = os.listdir('./')
+    # pkl_list = [i for i in dirlist if i[:4] == 'drop']
+    # for filename in pkl_list:
+    #     load_and_plot(filename)
+    # plt.legend()
+    # plt.show()
+    # exit()
+
     # parse args
     opts = {
-        'episodes': 3500,
+        'episodes': 2000,
         'max_er': 20000,
         'net_h_dim': 64,
+        'optimizer': 'Adam',
         'eps0': 1,
         'gamma': 0.99,
         'eps_decay': 0.999,
@@ -221,35 +271,42 @@ if __name__ == '__main__':
         'l1_reg': 0,
         'eval_steps': 50,
         'save_path': './results/model_' + datetime.datetime.now().strftime('%Y%m%d_%H%M'),
-        'dense_obs': True,
+        'dense_obs': False,
         'number_of_runs': 10
     }
     vis = Visdom(env='dqn_taxi')
 
-    runs = []
-    line_lb = []
-    line_ub = []
-    hidden_sizes = [64]
-    for val in range(opts['number_of_runs']):
-        st = time.time()
-        eval_rewards = train_model(opts)
+    for opt in ['Adam', 'RMSprop', 'Adamax']:
+        opts['optimizer'] = opt
+        print('optimizer = ' + opt)
 
-        d = dict(title='Evaluated Reward', xlabel='Evaluation Epochs', ylabel='Average Reward')
-        x = list(range(1, len(eval_rewards) + 1))
-        vis.line(Y=eval_rewards, X=x, win='eval_r', opts=d, update='append', name=str(val))
+        runs = []
+        line_lb = []
+        line_ub = []
+        for val in range(opts['number_of_runs']):
+            opts['save_path'] = './results/model_' + datetime.datetime.now().strftime('%Y%m%d_%H%M')
 
-        et = time.time() - st
-        print('Run number {}. Took {} seconds'.format(val, et))
+            st = time.time()
+            eval_rewards = train_model(opts)
 
-        runs.append(eval_rewards)
+            # d = dict(title='Evaluated Reward', xlabel='Evaluation Epochs', ylabel='Average Reward')
+            # x = list(range(1, len(eval_rewards) + 1))
+            # vis.line(Y=eval_rewards, X=x, win='eval_r', opts=d, update='append', name=str(val))
 
-    runs = torch.Tensor(runs)
-    if len(runs.shape) != 1:
-        for ind in range(runs.shape[1]):
-            act_acc_min_line, act_acc_max_line = stats.t.interval(0.95, len(runs[:, ind]) - 1,
-                                                                  loc=torch.mean(runs[:, ind]),
-                                                                  scale=stats.sem(runs[:, ind]))
-            line_lb.append(act_acc_min_line)
-            line_ub.append(act_acc_max_line)
-        lineplotCI(line=torch.mean(runs, dim=0), line_lb=line_lb, line_ub=line_ub)
-    vis.update_window_opts(win='eval_r', opts=dict(legend=[str(s) for s in hidden_sizes]))
+            et = time.time() - st
+            print('Run number {}. Took {} seconds'.format(val, et))
+
+            runs.append(eval_rewards)
+
+        runs = torch.Tensor(runs)
+        # if len(runs.shape) != 1:
+        #     for ind in range(runs.shape[1]):
+        #         min_line, max_line = stats.t.interval(0.95, len(runs[:, ind]) - 1,
+        #                                                               loc=torch.mean(runs[:, ind]),
+        #                                                               scale=stats.sem(runs[:, ind]))
+        #         line_lb.append(min_line)
+        #         line_ub.append(max_line)
+        #     lineplotCI(line=torch.mean(runs, dim=0), line_lb=line_lb, line_ub=line_ub)
+        # vis.update_window_opts(win='eval_r', opts=dict(legend=[str(s) for s in hidden_sizes]))
+        name = 'optimizer_' + opts['optimizer'] + '.pkl'
+        torch.save((opts, runs), name)

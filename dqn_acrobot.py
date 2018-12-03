@@ -282,7 +282,7 @@ if __name__ == '__main__':
         'gamma': 0.99,
         'eps_decay_steps': 5e5,
         'eps_end': 0.05,
-        'targ_update_steps': 2e3,
+        'targ_update_steps': 1e3,
         'learn_start_steps': 1e4,
         'lr': 0.001,
         'minibatch_size': 64,

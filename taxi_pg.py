@@ -103,25 +103,29 @@ class PGLoss(object):
         self.vc = v_weighting
         self.ec = eps
         self.ec_delta = eps_delta
-        self.mse = nn.MSELoss()
+        self.mse = nn.SmoothL1Loss()
 
     def calc_loss(self, steps, v_final):
 
-        returns = v_final
-        next_values = v_final
-        advantages = torch.zeros(v_final.size(), device=device)
+        returns = [v_final.squeeze()]
+        next_values = v_final.squeeze()
+        advantages = [torch.zeros(v_final.size(0), device=device)]
         for s in steps:
             rewards, dones, actions, policies, values = [obj.to(device) for obj in s]
             w = self.gamma * dones
-            returns = w * returns + rewards
-            errors = rewards + w * next_values - values
-            advantages = w * advantages * self.lamb + errors
-            next_values = values
+            returns.append(w * returns[-1] + rewards)
+            errors = rewards + w * next_values - values.squeeze()
+            advantages.append(w * advantages[-1] * self.lamb + errors)
+            next_values = values.squeeze()
 
-        rewards, dones, actions, policies, values = [torch.stack(obj, dim=0) for obj in zip(*steps)]
+        _, _, actions, policies, values = [torch.stack(obj, dim=1) for obj in zip(*steps)]
+
         probs = F.softmax(policies, dim=-1)
         log_probs = torch.log(probs)
         action_log_probs = log_probs.gather(-1, actions.long().to(device).unsqueeze(-1))
+
+        returns = torch.stack([r.detach() for r in returns[1:]], dim=1).unsqueeze(-1)
+        advantages = torch.stack(advantages[1:], dim=1).unsqueeze(-1)
 
         p_loss = - torch.sum(action_log_probs * advantages)
         v_loss = self.mse(values, returns)
@@ -131,18 +135,6 @@ class PGLoss(object):
         return p_loss + self.vc * v_loss + self.ec * e_loss
 
 
-def decode(i):
-    a = to_categorical((torch.fmod(i, 4)).long(), 4)
-    i = torch.div(i, 4).long()
-    b = to_categorical((torch.fmod(i, 5)), 5)
-    i = torch.div(i, 5).long()
-    c = to_categorical((torch.fmod(i, 5)), 5)
-    i = torch.div(i, 5).long()
-    d = to_categorical(i, 5)
-    # assert 0 <= i < 5
-    return torch.cat([d, c, b, a], dim=1).float()
-
-
 def to_categorical(inds, dim):
     v = torch.zeros((len(inds), dim))
     v[list(range(len(inds))), inds] = 1.0
@@ -150,10 +142,7 @@ def to_categorical(inds, dim):
 
 
 def make_state(obs_dim, inds):
-    if 19 == obs_dim:
-        v = decode(inds)
-    else:
-        v = to_categorical(inds, obs_dim)
+    v = to_categorical(inds, obs_dim)
     return v.to(device)
 
 
@@ -227,11 +216,11 @@ def train_model(opts):
 if __name__ == '__main__':
     # parse args
     opts = {
-        'net_h_dim': 128,
-        'eps0': 1,
+        'net_h_dim': 50,
+        'eps0': 10.0,
         'gamma': 0.99,
-        'eps_decay_steps': 5e5,
-        'eps_end': 0.05,
+        'eps_decay_steps': 1e6,
+        'eps_end': 0.0,
         'dropout': 0,
         'lr': 0.01,
         'save_path': './results/model_' + datetime.datetime.now().strftime('%Y%m%d_%H%M'),
@@ -269,4 +258,4 @@ if __name__ == '__main__':
             line_lb.append(act_acc_min_line)
             line_ub.append(act_acc_max_line)
         # lineplotCI(line=torch.mean(runs, dim=0), line_lb=line_lb, line_ub=line_ub)
-    vis.update_window_opts(win='eval_r', opts=dict(legend=[str(s) for s in hidden_sizes]))
+    # vis.update_window_opts(win='eval_r', opts=dict(legend=[str(s) for s in hidden_sizes]))

@@ -69,12 +69,13 @@ class DQNLoss(object):
 
 
 class ExperienceReplay(object):
-    def __init__(self, max_size, success=False, suc_pr=0.5):
+    def __init__(self, max_size, success=False, suc_pr=0.5, suc_steps = 5e5):
         self.size = max_size
         self.q = []
         if success:
             self.suc_mem = ExperienceReplay(int(0.1 * max_size))
             self.suc_pr = suc_pr
+            self.suc_delta = suc_pr / suc_steps
         else:
             self.suc_mem = None
 
@@ -91,10 +92,14 @@ class ExperienceReplay(object):
             self.q = self.q[:self.size]
 
     def sample(self, b_size):
+        if self.suc_mem:
+            self.suc_pr -= self.suc_delta
+
         if self.suc_mem is None or len(self.suc_mem) < b_size or torch.rand(()) > self.suc_pr:
             b_inds = torch.randperm(len(self))[:b_size]
             return self[b_inds]
         else:
+            # Sample from success memory and reduce probability
             return self.suc_mem.sample(b_size)
 
     def __len__(self):
@@ -125,43 +130,31 @@ def to_categorical(inds, dim):
     return v
 
 
-def eval_model(model, obs_dim, env):
+def eval_model(model, env):
     print("Evaluating model...")
     model.eval()
-    eps = 0.05
-    eval_steps = 1000
+    eps = 0.01
+    eval_episodes = 10
     cr = 0
 
-    env.reset()
-    # last_screen = get_screen(env)
-    # current_screen = get_screen(env)
-    # obs = current_screen - last_screen
-    s = 1 - get_screen(env)
-    obs = torch.cat([s for _ in range(opts['hist_len'])], dim=1)
+    for _ in range(eval_episodes):
+        done = False
+        env.reset()
+        s = 1 - get_screen(env)
+        obs = torch.cat([s for _ in range(opts['hist_len'])], dim=1)
 
-    for _ in range(eval_steps):
-        if torch.rand(()) > eps:
-            act = torch.argmax(model(obs)).item()
-        else:
-            act = env.action_space.sample()
+        while not done:
+            if torch.rand(()) > eps:
+                act = torch.argmax(model(obs)).item()
+            else:
+                act = env.action_space.sample()
 
-        _, r, done, _ = env.step(act)
+            _, r, done, _ = env.step(act)
+            obs = torch.cat([obs[:, 1:, :, :], 1 - get_screen(env)], dim=1)
 
-        # last_screen = current_screen
-        # current_screen = get_screen(env)
-        # obs = current_screen - last_screen
-        obs = torch.cat([obs[:, 1:, :, :], 1 - get_screen(env)], dim=1)
+            cr += r
 
-        if done:
-            env.reset()
-            # last_screen = get_screen(env)
-            # current_screen = get_screen(env)
-            s = 1 - get_screen(env)
-            obs = torch.cat([s for _ in range(opts['hist_len'])], dim=1)
-
-        cr += r
-
-    avg_r = cr
+    avg_r = cr / eval_episodes
     model.train()
     print("Evaluation done.")
     return avg_r
@@ -189,6 +182,7 @@ def train_model(opts):
     eps = opts['eps0']
     step_counter = 0
     eval_rewards = []
+    max_r = -1000
     vis = Visdom(env='dqn_acrobot')
     t = trange(opts['episodes'])
     declared = False
@@ -248,14 +242,16 @@ def train_model(opts):
         t.set_description('Reward: {}'.format(cr))
 
         if (not e % opts['eval_e_freq']) and step_counter > opts['learn_start_steps']:
-            eval_rewards.append(eval_model(net, obs_dim, env))
+            eval_rewards.append(eval_model(net, env))
             d = dict(title='Evaluated Reward', xlabel='Evaluation Epochs', ylabel='Average Reward')
             x = list(range(1, len(eval_rewards) + 1))
             vis.line(Y=eval_rewards, X=x, win='eval_r', opts=d)
+            if eval_rewards[-1] > max_r:
+                torch.save(net.state_dict(), opts['save_path'])
 
         # print("Episode {} done. Reward: {}".format(e, cr))
 
-    # torch.save(net.state_dict(), opts['save_path'])
+    torch.save(net.state_dict(), opts['save_path'] + '_final')
     return eval_rewards
 
 
@@ -282,7 +278,7 @@ if __name__ == '__main__':
         'gamma': 0.99,
         'eps_decay_steps': 5e5,
         'eps_end': 0.05,
-        'targ_update_steps': 1e3,
+        'targ_update_steps': 1.5e3,
         'learn_start_steps': 1e4,
         'lr': 0.001,
         'minibatch_size': 64,
@@ -296,7 +292,7 @@ if __name__ == '__main__':
         'max_suc_len': 100,
         'hist_len': 4
     }
-    vis = Visdom(env='dqn_taxi')
+    vis = Visdom(env='dqn_acrobot')
 
     runs = []
     line_lb = []

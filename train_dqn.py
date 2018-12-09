@@ -197,9 +197,10 @@ def train_model(opts):
     return eval_rewards
 
 
-def lineplotCI(line, line_lb, line_ub, name):
+def lineplotCI(line, line_lb, line_ub, name, x=None):
     # plot the data
-    x = range(1, line.shape[0] + 1)
+    if x is None:
+        x = range(1, line.shape[0] + 1)
     plt.figure(1)
     # plot the shaded range of the confidence intervals
     if line_ub is not None and line_lb is not None:

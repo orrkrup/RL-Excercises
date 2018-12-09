@@ -214,44 +214,47 @@ def lineplotCI(line, line_lb, line_ub, name):
 
 
 
-def load_and_plot(filename):
+def load_and_plot(filename, smooth=False):
     opts, runs = torch.load(filename)
     vis = Visdom(env='dqn_taxi')
 
-    # zeros = torch.zeros(runs.shape)
-    # smooth_runs = [torch.cat((zeros[:, -n:], runs[:, :-n]), dim=1).unsqueeze(-1) for n in range(1, 10)]
-    # smooth_runs = torch.mean(torch.cat([runs.unsqueeze(-1)] + smooth_runs,dim=-1), dim=-1)
+    if smooth:
+        zeros = torch.zeros(runs.shape)
+        smooth_runs = [torch.cat((zeros[:, -n:], runs[:, :-n]), dim=1).unsqueeze(-1) for n in range(1, 10)]
+        smooth_runs = torch.mean(torch.cat([runs.unsqueeze(-1)] + smooth_runs,dim=-1), dim=-1)
+        line_lbs = []
+        line_ubs = []
 
     line_lb = []
     line_ub = []
-    # line_lbs = []
-    # line_ubs = []
     if len(runs.shape) != 1:
-        for ind in range(runs.shape[1]):
-            min_line, max_line = stats.t.interval(0.95, len(runs[:, ind]) - 1,
-                                                  loc=torch.mean(runs[:, ind]),
-                                                  scale=stats.sem(runs[:, ind]))
-            line_lb.append(min_line)
-            line_ub.append(max_line)
-        lineplotCI(line=torch.mean(runs, dim=0), line_lb=line_lb, line_ub=line_ub, name=filename[:-4])
-        # for ind in range(smooth_runs.shape[1]):
-        #     min_line, max_line = stats.t.interval(0.95, len(smooth_runs[:, ind]) - 1,
-        #                                           loc=torch.mean(smooth_runs[:, ind]),
-        #                                           scale=stats.sem(smooth_runs[:, ind]))
-        #     line_lbs.append(min_line)
-        #     line_ubs.append(max_line)
-        # lineplotCI(line=torch.mean(smooth_runs, dim=0), line_lb=line_lbs, line_ub=line_ubs)
+        if smooth:
+            for ind in range(smooth_runs.shape[1]):
+                min_line, max_line = stats.t.interval(0.95, len(smooth_runs[:, ind]) - 1,
+                                                      loc=torch.mean(smooth_runs[:, ind]),
+                                                      scale=stats.sem(smooth_runs[:, ind]))
+                line_lbs.append(min_line)
+                line_ubs.append(max_line)
+            lineplotCI(line=torch.mean(smooth_runs, dim=0), line_lb=line_lbs, line_ub=line_ubs, name=filename[:-4])
+        else:
+            for ind in range(runs.shape[1]):
+                min_line, max_line = stats.t.interval(0.95, len(runs[:, ind]) - 1,
+                                                      loc=torch.mean(runs[:, ind]),
+                                                      scale=stats.sem(runs[:, ind]))
+                line_lb.append(min_line)
+                line_ub.append(max_line)
+            lineplotCI(line=torch.mean(runs, dim=0), line_lb=line_lb, line_ub=line_ub, name=filename[:-4])
     # vis.update_window_opts(win='eval_r', opts=dict(legend=[str(s) for s in hidden_sizes]))
 
 
 if __name__ == '__main__':
-    # dirlist = os.listdir('./')
-    # pkl_list = [i for i in dirlist if i[:4] == 'drop']
-    # for filename in pkl_list:
-    #     load_and_plot(filename)
-    # plt.legend()
-    # plt.show()
-    # exit()
+    dirlist = os.listdir('./')
+    pkl_list = [i for i in dirlist if i[:4] == 'opti']
+    for filename in pkl_list:
+        load_and_plot(filename, smooth=True)
+    plt.legend()
+    plt.show()
+    exit()
 
     # parse args
     opts = {

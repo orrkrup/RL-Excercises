@@ -73,7 +73,7 @@ class TwoLayerFC(nn.Module):
         super(TwoLayerFC, self).__init__()
         self.net = nn.Sequential(
             nn.Linear(in_dim, h_dim),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(h_dim, out_dim)
         )
 
@@ -186,8 +186,8 @@ def train_model(opts):
             vobs, r, done, _ = env.step(act)
             obs = make_state(obs_dim, torch.LongTensor(vobs))
 
-            steps.insert(0, (torch.Tensor(r), torch.Tensor([0.0 if d else 1.0 for d in done]),
-                             torch.Tensor(act), p, v))
+            done_vec = [0.0 if (d and r[i] > 0) else 1.0 for i, d in enumerate(done)]
+            steps.insert(0, (torch.Tensor(r), torch.Tensor(done_vec), torch.Tensor(act), p, v))
 
             eval_rewards = [eval_rewards[i] + rr for i, rr in enumerate(r)]
             for i, d in enumerate(done):
@@ -215,7 +215,7 @@ if __name__ == '__main__':
     # parse args
     opts = {
         'net_h_dim': 50,
-        'eps0': 6.0,
+        'eps0': 2.0,
         'gamma': 0.99,
         'eps_decay_steps': 1e6,
         'eps_end': 0.0,

@@ -234,7 +234,7 @@ def train_model(opts):
                 loss.backward()
                 opt.step()
 
-                # vis.line(Y=loss_c, X=list(range(len(loss_c))), win='loss', opts=dict(title='DQN Loss'))
+                vis.line(Y=loss_c, X=list(range(len(loss_c))), win='loss', opts=dict(title='DQN Loss'))
 
                 if not step_counter % opts['targ_update_steps']:
                     loss_obj.update_target(net)

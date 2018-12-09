@@ -3,14 +3,11 @@
 
 import torch
 from torch import nn
-import copy
 import gym
 from visdom import Visdom
 import torch.nn.functional as F
 import datetime
 import time
-from tqdm import trange
-import matplotlib.pyplot as plt
 import scipy.stats as stats
 import numpy as np
 
@@ -72,14 +69,12 @@ class BatchEnv(gym.Env):
 
 
 class TwoLayerFC(nn.Module):
-    def __init__(self, in_dim, h_dim, out_dim, dropout=0):
+    def __init__(self, in_dim, h_dim, out_dim):
         super(TwoLayerFC, self).__init__()
         self.net = nn.Sequential(
             nn.Linear(in_dim, h_dim),
-            nn.Dropout(p=dropout),
-            nn.ReLU(),
-            nn.Linear(h_dim, out_dim),
-            nn.Dropout(p=dropout)
+            nn.Tanh(),
+            nn.Linear(h_dim, out_dim)
         )
 
     def forward(self, x_in):
@@ -87,23 +82,25 @@ class TwoLayerFC(nn.Module):
 
 
 class PGModel(nn.Module):
-    def __init__(self, in_dim, h_dim, act_dim, dropout=0):
+    def __init__(self, in_dim, h_dim, act_dim):
         super(PGModel, self).__init__()
-        self.p = TwoLayerFC(in_dim, h_dim, act_dim, dropout)
-        self.v = TwoLayerFC(in_dim, h_dim, 1, dropout)
+        self.p = TwoLayerFC(in_dim, h_dim, act_dim)
+        self.v = TwoLayerFC(in_dim, h_dim, 1)
 
     def forward(self, x_in):
         return self.p(x_in), self.v(x_in)
 
 
 class PGLoss(object):
-    def __init__(self, gamma, lamb, v_weighting, eps, eps_delta):
+    def __init__(self, gamma, lamb, v_weighting, eps, eps_delta, eps_end):
         self.gamma = gamma
         self.lamb = lamb
         self.vc = v_weighting
         self.ec = eps
         self.ec_delta = eps_delta
-        self.mse = nn.SmoothL1Loss()
+        self.ec_end = eps_end
+        # self.mse = nn.SmoothL1Loss()
+        self.mse = nn.MSELoss()
 
     def calc_loss(self, steps, v_final):
 
@@ -121,17 +118,18 @@ class PGLoss(object):
         _, _, actions, policies, values = [torch.stack(obj, dim=1) for obj in zip(*steps)]
 
         probs = F.softmax(policies, dim=-1)
-        log_probs = torch.log(probs)
+        log_probs = F.log_softmax(policies, dim=-1)
         action_log_probs = log_probs.gather(-1, actions.long().to(device).unsqueeze(-1))
 
-        returns = torch.stack([r.detach() for r in returns[1:]], dim=1).unsqueeze(-1)
+        returns = torch.stack(returns[1:], dim=1).unsqueeze(-1)
         advantages = torch.stack(advantages[1:], dim=1).unsqueeze(-1)
 
-        p_loss = - torch.sum(action_log_probs * advantages)
-        v_loss = self.mse(values, returns)
+        p_loss = - torch.sum(action_log_probs * advantages.detach())
+        v_loss = self.mse(values, returns.detach())
         e_loss = torch.sum(log_probs * probs)
 
-        self.ec -= self.ec_delta
+        if self.ec > self.ec_end:
+            self.ec -= self.ec_delta
         return p_loss + self.vc * v_loss + self.ec * e_loss
 
 
@@ -154,10 +152,10 @@ def train_model(opts):
     obs_dim = env.observation_space.n
 
     # Initizlize Model, loss function and optimizer
-    net = PGModel(obs_dim, opts['net_h_dim'], env.action_space.n, opts['dropout']).to(device)
+    net = PGModel(obs_dim, opts['net_h_dim'], env.action_space.n).to(device)
 
     eps_delta = (opts['eps0'] - opts['eps_end']) / opts['eps_decay_steps']
-    loss_obj = PGLoss(opts['gamma'], opts['lamb'], opts['value_weighting'], opts['eps0'], eps_delta)
+    loss_obj = PGLoss(opts['gamma'], opts['lamb'], opts['value_weighting'], opts['eps0'], eps_delta, opts['eps_end'])
     loss_func = loss_obj.calc_loss
     opt = torch.optim.Adam(net.parameters(), lr=opts['lr'])
     opt.zero_grad()
@@ -165,7 +163,7 @@ def train_model(opts):
     # Initialize other parameters:
     eps = opts['eps0']
     step_counter = 0
-    eval_rewards = [0]*opts['num_workers']
+    eval_rewards = [0] * opts['num_workers']
     total_steps_plt = []
     reward_plt = []
     vis = Visdom(env='pg_taxi')
@@ -217,18 +215,17 @@ if __name__ == '__main__':
     # parse args
     opts = {
         'net_h_dim': 50,
-        'eps0': 10.0,
+        'eps0': 6.0,
         'gamma': 0.99,
         'eps_decay_steps': 1e6,
         'eps_end': 0.0,
-        'dropout': 0,
         'lr': 0.01,
         'save_path': './results/model_' + datetime.datetime.now().strftime('%Y%m%d_%H%M'),
         'number_of_runs': 1,
         'num_workers': 64,
         'lamb': 0.95,
         'value_weighting': 0.5,
-        'max_steps': 4e6,
+        'max_steps': 3e6,
         'rollout_steps': 40
     }
     vis = Visdom(env='dqn_taxi')

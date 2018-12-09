@@ -69,7 +69,7 @@ class DQNLoss(object):
 
 
 class ExperienceReplay(object):
-    def __init__(self, max_size, success=False, suc_pr=0.5, suc_steps = 5e5):
+    def __init__(self, max_size, success=False, suc_pr=0.5, suc_steps=5e5):
         self.size = max_size
         self.q = []
         if success:

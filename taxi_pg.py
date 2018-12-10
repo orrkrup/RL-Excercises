@@ -210,7 +210,7 @@ def train_model(opts):
         opt.step()
         opt.zero_grad()
 
-    # torch.save(net.state_dict(), opts['save_path'])
+    torch.save(net.state_dict(), opts['save_path'])
     return reward_plt, total_steps_plt
 
 
@@ -220,8 +220,9 @@ def load_and_plot(filename, smooth=False):
 
     if smooth:
         zeros = torch.zeros(runs_y.shape)
-        smooth_runs = [torch.cat((zeros[:, -n:], runs_y[:, :-n]), dim=1).unsqueeze(-1) for n in range(1, 50)]
-        smooth_runs = torch.mean(torch.cat([runs_y.unsqueeze(-1)] + smooth_runs, dim=-1), dim=-1)
+        smooth_runs = [torch.cat((zeros[:, -n:], runs_y[:, :-n]), dim=1).unsqueeze(-1) for n in range(1, 200)]
+        smooth_runs = torch.cat([runs_y.unsqueeze(-1)] + smooth_runs, dim=-1).squeeze().transpose(1,0)
+        # smooth_runs = torch.mean(smooth_runs, dim=-1)
         line_lbs = []
         line_ubs = []
 
@@ -251,17 +252,17 @@ def load_and_plot(filename, smooth=False):
 
 if __name__ == '__main__':
     dirlist = os.listdir('./')
-    pkl_list = [i for i in dirlist if i[:4] == 'eps0']
+    pkl_list = [i for i in dirlist if i[:8] == 'eps0_1.0']
     for filename in pkl_list:
         load_and_plot(filename, smooth=True)
-    plt.legend()
+    # plt.legend()
     plt.show()
     exit()
 
     # parse args
     opts = {
         'net_h_dim': 50,
-        'eps0': 2.0,
+        'eps0': 1.0,
         'gamma': 0.99,
         'eps_decay_steps': 1e6,
         'eps_end': 0.0,
@@ -276,7 +277,7 @@ if __name__ == '__main__':
     }
     vis = Visdom(env='dqn_taxi')
 
-    for eps0 in [4.0, 2.5]:
+    for eps0 in [1.0]:
         opts['eps0'] = eps0
         print('eps0 = ' + str(eps0))
 

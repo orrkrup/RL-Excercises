@@ -4,7 +4,6 @@ import argparse
 import torch
 import gym
 from tqdm import trange
-import imageio
 
 from dqn_acrobot import ConvolutionalDQN, get_screen_
 
@@ -23,7 +22,7 @@ if __name__ == '__main__':
     env = gym.make('Acrobot-v1')
     hist_len = 4
     model = ConvolutionalDQN(env.action_space.n, hist_len, dueling=True).to(device)
-    model.load_state_dict(torch.load(args.modelfilename))
+    model.load_state_dict(torch.load(args.modelfilename, map_location=device))
     model.eval()
 
     eps = 0.00
@@ -67,4 +66,5 @@ if __name__ == '__main__':
     print("Model Evaluation done. Average reward: {} +- {}".format(torch.mean(r), torch.std(r)))
 
     if args.save_video > 0:
+        import imageio
         imageio.mimsave('acrobot.gif', images)

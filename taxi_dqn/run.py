@@ -7,7 +7,7 @@ from tqdm import trange
 
 from train_dqn import TwoLayerDQN, make_state
 
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=None)
@@ -20,7 +20,7 @@ if __name__ == '__main__':
     env = gym.make('Taxi-v2')
     obs_dim = env.observation_space.n
     model = TwoLayerDQN(obs_dim, 64, env.action_space.n).to(device)
-    model.load_state_dict(torch.load(args.modelfilename))
+    model.load_state_dict(torch.load(args.modelfilename, map_location=device))
     model.eval()
 
     eps = 0.01

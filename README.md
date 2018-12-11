@@ -7,6 +7,8 @@ Three packages each hold a `run.py` file for one of the trained models:
 * Policy Gradient (A2C) solution of Taxi-v2
 * DQN visual solution of Acrobot-v1
 
+Additionally, a PDF report is included as drl_mid.pdf. 
+
 ## Usage
 Clone the repository to your local environment. To install, type `pip install .` in the main directory. 
 To view results and evaluate model, from the main directory run `./package_name/run.py`.

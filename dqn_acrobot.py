@@ -41,7 +41,7 @@ class ConvolutionalDQN(nn.Module):
 
 
 class DQNLoss(object):
-    def __init__(self, net, er, gamma, mbatch_size, obs_dim, l1_reg=0):
+    def __init__(self, net, er, gamma, mbatch_size, obs_dim, double_dqn=False, l1_reg=0):
         self.target_net = copy.deepcopy(net)
         self.er = er
         self.gamma = gamma
@@ -49,6 +49,7 @@ class DQNLoss(object):
         self.obs_dim = obs_dim
         self.l = F.smooth_l1_loss
         self.l1_reg = l1_reg
+        self.double = double_dqn
 
     def update_target(self, net):
         self.target_net = copy.deepcopy(net)
@@ -62,7 +63,11 @@ class DQNLoss(object):
         mb_a = torch.LongTensor(mb_a).to(device)
         mb_r = torch.Tensor(mb_r).to(device)
         with torch.no_grad():
-            y = mb_r.float() + self.gamma * torch.max(self.target_net(mb_st), dim=-1)[0] * mb_t.float()
+            if self.double:
+                best_a = torch.argmax(net(mb_st), dim=-1).unsqueeze(-1)
+                y = mb_r.float() + self.gamma * self.target_net(mb_st).gather(1, best_a).squeeze() * mb_t.float()
+            else:
+                y = mb_r.float() + self.gamma * torch.max(self.target_net(mb_st), dim=-1)[0] * mb_t.float()
         Q = net(mb_s).gather(1, mb_a.unsqueeze(-1)).squeeze()
         l1_norm = torch.sum(torch.Tensor([torch.sum(torch.abs(param)) for param in net.parameters()]).to(device))
         return self.l(Q, y) + self.l1_reg * l1_norm
@@ -76,6 +81,7 @@ class ExperienceReplay(object):
             self.suc_mem = ExperienceReplay(int(0.1 * max_size))
             self.suc_pr = suc_pr
             self.suc_delta = suc_pr / suc_steps
+            self.suc_min = 0.1
         else:
             self.suc_mem = None
 
@@ -92,7 +98,7 @@ class ExperienceReplay(object):
             self.q = self.q[:self.size]
 
     def sample(self, b_size):
-        if self.suc_mem:
+        if self.suc_mem and self.suc_pr > self.suc_min:
             self.suc_pr -= self.suc_delta
 
         if self.suc_mem is None or len(self.suc_mem) < b_size or torch.rand(()) > self.suc_pr:
@@ -174,7 +180,8 @@ def train_model(opts):
 
     # Initizlize Model, loss function and optimizer
     net = ConvolutionalDQN(env.action_space.n, opts['dropout']).to(device)
-    loss_obj = DQNLoss(net, er, opts['gamma'], opts['minibatch_size'], obs_dim, opts['l1_reg'])
+    loss_obj = DQNLoss(net, er, opts['gamma'], opts['minibatch_size'], obs_dim,
+                       double_dqn=opts['double_dqn'], l1_reg=opts['l1_reg'])
     loss_func = loss_obj.calc_loss
     opt = torch.optim.Adam(net.parameters(), lr=opts['lr'])
 
@@ -183,7 +190,7 @@ def train_model(opts):
     step_counter = 0
     eval_rewards = []
     max_r = -1000
-    vis = Visdom(env='dqn_acrobot')
+    vis = Visdom(env='dqn_acrobot' + opts['env_id'])
     t = trange(opts['episodes'])
     declared = False
     eps_delta = (opts['eps0'] - opts['eps_end']) / opts['eps_decay_steps']
@@ -234,8 +241,6 @@ def train_model(opts):
                 loss.backward()
                 opt.step()
 
-                vis.line(Y=loss_c, X=list(range(len(loss_c))), win='loss', opts=dict(title='DQN Loss'))
-
                 if not step_counter % opts['targ_update_steps']:
                     loss_obj.update_target(net)
 
@@ -248,6 +253,8 @@ def train_model(opts):
             vis.line(Y=eval_rewards, X=x, win='eval_r', opts=d)
             if eval_rewards[-1] > max_r:
                 torch.save(net.state_dict(), opts['save_path'])
+
+            vis.line(Y=loss_c, X=list(range(len(loss_c))), win='loss', opts=dict(title='DQN Loss'))
 
         # print("Episode {} done. Reward: {}".format(e, cr))
 
@@ -276,11 +283,11 @@ if __name__ == '__main__':
         'net_h_dim': 64,
         'eps0': 1,
         'gamma': 0.99,
-        'eps_decay_steps': 5e5,
-        'eps_end': 0.05,
-        'targ_update_steps': 1.5e3,
+        'eps_decay_steps': 1e6,
+        'eps_end': 0.1,
+        'targ_update_steps': 600,
         'learn_start_steps': 1e4,
-        'lr': 0.001,
+        'lr': 0.0002,
         'minibatch_size': 64,
         'dropout': 0,
         'l1_reg': 0,
@@ -289,10 +296,11 @@ if __name__ == '__main__':
         'dense_obs': False,
         'number_of_runs': 1,
         'success_exp_replay': True,
-        'max_suc_len': 100,
-        'hist_len': 4
+        'max_suc_len': 200,
+        'hist_len': 4,
+        'double_dqn': True,
+        'env_id': '3'
     }
-    vis = Visdom(env='dqn_acrobot')
 
     runs = []
     line_lb = []
@@ -301,6 +309,8 @@ if __name__ == '__main__':
     for val in range(opts['number_of_runs']):
         st = time.time()
         eval_rewards = train_model(opts)
+
+        vis = Visdom(env='dqn_acrobot' + opts['env_id'])
 
         d = dict(title='Evaluated Reward', xlabel='Evaluation Epochs', ylabel='Average Reward')
         x = list(range(1, len(eval_rewards) + 1))

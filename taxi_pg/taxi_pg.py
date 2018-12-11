@@ -6,15 +6,12 @@ import sys
 import torch
 from torch import nn
 import gym
-from visdom import Visdom
 import torch.nn.functional as F
 import datetime
 import time
-import scipy.stats as stats
 import numpy as np
 from tqdm import trange
 import os
-import matplotlib.pyplot as plt
 
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 from taxi_dqn.train_dqn import lineplotCI
@@ -220,6 +217,8 @@ def train_model(opts):
 
 
 def load_and_plot(filename, smooth=False):
+    import scipy.stats as stats
+
     opts, runs_x, runs_y = torch.load(filename)
     vis = Visdom(env='dqn_taxi')
 
@@ -256,6 +255,10 @@ def load_and_plot(filename, smooth=False):
 
 
 if __name__ == '__main__':
+
+    import matplotlib.pyplot as plt
+    from visdom import Visdom
+
     # dirlist = os.listdir('./')
     # pkl_list = [i for i in dirlist if i[:8] == 'eps0_1.0']
     # for filename in pkl_list:

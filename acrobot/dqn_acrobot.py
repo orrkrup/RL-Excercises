@@ -5,13 +5,10 @@ import torch
 from torch import nn
 import copy
 import gym
-from visdom import Visdom
 import torch.nn.functional as F
 import datetime
 import time
 from tqdm import trange
-import matplotlib.pyplot as plt
-import scipy.stats as stats
 import numpy as np
 import torchvision.transforms as T
 from PIL import Image
@@ -272,6 +269,8 @@ def train_model(opts):
 
 
 def lineplotCI(line, line_lb, line_ub):
+    import matplotlib.pyplot as plt
+
     # plot the data
     x = range(1, line.shape[0] + 1)
     plt.figure(1)
@@ -310,6 +309,9 @@ if __name__ == '__main__':
         'dueling': True,
         'env_id': '3'
     }
+
+    from visdom import Visdom
+    import scipy.stats as stats
 
     runs = []
     line_lb = []

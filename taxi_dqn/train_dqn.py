@@ -5,13 +5,10 @@ import torch
 from torch import nn
 import copy
 import gym
-from visdom import Visdom
 import torch.nn.functional as F
 import datetime
 import time
 from tqdm import trange
-import matplotlib.pyplot as plt
-import scipy.stats as stats
 import numpy as np
 import os
 
@@ -199,6 +196,7 @@ def train_model(opts):
 
 
 def lineplotCI(line, line_lb, line_ub, name, x=None):
+
     # plot the data
     if x is None:
         x = range(1, line.shape[0] + 1)
@@ -250,6 +248,10 @@ def load_and_plot(filename, smooth=False):
 
 
 if __name__ == '__main__':
+    from visdom import Visdom
+    import matplotlib.pyplot as plt
+    import scipy.stats as stats
+
     # dirlist = os.listdir('./')
     # pkl_list = [i for i in dirlist if i[:8] == 'dense2_F']
     # for filename in pkl_list:

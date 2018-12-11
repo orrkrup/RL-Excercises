@@ -7,6 +7,8 @@ from tqdm import trange
 
 from taxi_pg import PGModel, to_categorical
 
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
 
 def make_state(obs_dim, inds):
     v = to_categorical(inds, obs_dim)
@@ -23,7 +25,7 @@ if __name__ == '__main__':
 
     env = gym.make('Taxi-v2')
     obs_dim = env.observation_space.n
-    model = PGModel(obs_dim, 50, env.action_space.n)
+    model = PGModel(obs_dim, 50, env.action_space.n).to(device)
     model.load_state_dict(torch.load(args.modelfilename))
     model.eval()
 

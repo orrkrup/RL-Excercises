@@ -8,6 +8,7 @@ import imageio
 
 from dqn_acrobot import ConvolutionalDQN, get_screen_
 
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=None)
@@ -21,7 +22,7 @@ if __name__ == '__main__':
 
     env = gym.make('Acrobot-v1')
     hist_len = 4
-    model = ConvolutionalDQN(env.action_space.n, hist_len, dueling=True).cuda()
+    model = ConvolutionalDQN(env.action_space.n, hist_len, dueling=True).to(device)
     model.load_state_dict(torch.load(args.modelfilename))
     model.eval()
 

@@ -17,6 +17,12 @@ Each package also contains a training file, which can be used to train a new mod
 ## Requirements
 * PyTorch 0.4
 * gym
+* tqdm
+
+For training:
+* visdom
+* matplotlib
+
 
 We ran our code on Python 3.6. It will probably work on other python versions as well, although it was not tested for any of them.
 

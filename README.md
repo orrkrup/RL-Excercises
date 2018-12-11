@@ -8,7 +8,7 @@ Three packages each hold a `run.py` file for one of the trained models:
 * DQN visual solution of Acrobot-v1
 
 ## Usage
-Clone the repository to your local environment.
+Clone the repository to your local environment. To install, type `pip install .` in the main directory. 
 To view results and evaluate model, from the main directory run `./package_name/run.py`.
 Each package also contains a training file, which can be used to train a new model.
 

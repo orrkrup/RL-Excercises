@@ -215,7 +215,7 @@ if __name__ == '__main__':
     # parse args
     opts = {
         'net_h_dim': 50,
-        'eps0': 2.0,
+        'eps0': 1.0,
         'gamma': 0.99,
         'eps_decay_steps': 1e6,
         'eps_end': 0.0,

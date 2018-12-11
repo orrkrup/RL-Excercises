@@ -20,33 +20,42 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class ConvolutionalDQN(nn.Module):
-    def __init__(self, act_dim, dropout=0):
+    def __init__(self, act_dim, in_dim, dueling=False):
         super(ConvolutionalDQN, self).__init__()
         self.net = nn.Sequential(
-            nn.Conv2d(4, 16, kernel_size=5, stride=2),
-            # nn.BatchNorm2d(16),
+            nn.Conv2d(in_dim, 16, kernel_size=5, stride=2),
+            nn.BatchNorm2d(16),
             nn.ReLU(),
             nn.Conv2d(16, 32, kernel_size=5, stride=2),
-            # nn.BatchNorm2d(32),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.Conv2d(32, 32, kernel_size=5, stride=2),
-            # nn.BatchNorm2d(32),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
         )
-        self.head = nn.Linear(128, act_dim)
+        self.ddqn = dueling
+        if self.ddqn:
+            self.v_head = nn.Linear(128, 1)
+            self.a_head = nn.Linear(128, act_dim)
+        else:
+            self.head = nn.Linear(128, act_dim)
 
     def forward(self, x):
         x = self.net(x)
-        return self.head(x.view(x.size(0), -1))
+        if self.ddqn:
+            vx = x.view(x.size(0), -1)
+            a = self.a_head(vx)
+            return self.v_head(vx) + a - torch.mean(a, dim=-1, keepdim=True)
+        else:
+            return self.head(x.view(x.size(0), -1))
 
 
 class DQNLoss(object):
-    def __init__(self, net, er, gamma, mbatch_size, obs_dim, double_dqn=False, l1_reg=0):
+    def __init__(self, net, er, gamma, mbatch_size, double_dqn=False, l1_reg=0):
         self.target_net = copy.deepcopy(net)
         self.er = er
         self.gamma = gamma
         self.batch_size = mbatch_size
-        self.obs_dim = obs_dim
         self.l = F.smooth_l1_loss
         self.l1_reg = l1_reg
         self.double = double_dqn
@@ -57,8 +66,8 @@ class DQNLoss(object):
     def calc_loss(self, net):
         minibatch = self.er.sample(self.batch_size)
         mb_s, mb_a, mb_r, mb_st, mb_t = zip(*minibatch)
-        mb_s = torch.cat(mb_s, dim=0)
-        mb_st = torch.cat(mb_st, dim=0)
+        mb_s = torch.cat(mb_s, dim=0).to(device)
+        mb_st = torch.cat(mb_st, dim=0).to(device)
         mb_t = torch.Tensor(mb_t).to(device)
         mb_a = torch.LongTensor(mb_a).to(device)
         mb_r = torch.Tensor(mb_r).to(device)
@@ -173,14 +182,9 @@ def train_model(opts):
     # Initialize Experience Reply
     er = ExperienceReplay(opts['max_er'], success=opts['success_exp_replay'])
 
-    if opts['dense_obs']:
-        print('No dense representation')
-    else:
-        obs_dim = None
-
     # Initizlize Model, loss function and optimizer
-    net = ConvolutionalDQN(env.action_space.n, opts['dropout']).to(device)
-    loss_obj = DQNLoss(net, er, opts['gamma'], opts['minibatch_size'], obs_dim,
+    net = ConvolutionalDQN(env.action_space.n, opts['hist_len'], opts['dueling']).to(device)
+    loss_obj = DQNLoss(net, er, opts['gamma'], opts['minibatch_size'],
                        double_dqn=opts['double_dqn'], l1_reg=opts['l1_reg'])
     loss_func = loss_obj.calc_loss
     opt = torch.optim.Adam(net.parameters(), lr=opts['lr'])
@@ -285,20 +289,20 @@ if __name__ == '__main__':
         'gamma': 0.99,
         'eps_decay_steps': 1e6,
         'eps_end': 0.1,
-        'targ_update_steps': 600,
+        'targ_update_steps': 1500,
         'learn_start_steps': 1e4,
         'lr': 0.0002,
-        'minibatch_size': 64,
+        'minibatch_size': 128,
         'dropout': 0,
         'l1_reg': 0,
         'eval_e_freq': 20,
         'save_path': './results/model_' + datetime.datetime.now().strftime('%Y%m%d_%H%M'),
-        'dense_obs': False,
         'number_of_runs': 1,
         'success_exp_replay': True,
         'max_suc_len': 200,
         'hist_len': 4,
         'double_dqn': True,
+        'dueling': True,
         'env_id': '3'
     }
 

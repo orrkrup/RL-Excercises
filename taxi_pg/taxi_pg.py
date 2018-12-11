@@ -13,7 +13,7 @@ import numpy as np
 from tqdm import trange
 import os
 import matplotlib.pyplot as plt
-from train_dqn import lineplotCI
+from taxi_dqn.train_dqn import lineplotCI
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 

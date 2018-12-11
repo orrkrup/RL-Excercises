@@ -197,9 +197,10 @@ def train_model(opts):
     return eval_rewards
 
 
-def lineplotCI(line, line_lb, line_ub, name):
+def lineplotCI(line, line_lb, line_ub, name, x=None):
     # plot the data
-    x = range(1, line.shape[0] + 1)
+    if x is None:
+        x = range(1, line.shape[0] + 1)
     plt.figure(1)
     # plot the shaded range of the confidence intervals
     if line_ub is not None and line_lb is not None:
@@ -249,16 +250,17 @@ def load_and_plot(filename, smooth=False):
 
 if __name__ == '__main__':
     dirlist = os.listdir('./')
-    pkl_list = [i for i in dirlist if i[:4] == 'opti']
+    pkl_list = [i for i in dirlist if i[:8] == 'dense2_F']
     for filename in pkl_list:
-        load_and_plot(filename, smooth=True)
-    plt.legend()
+        load_and_plot(filename, smooth=False)
+    # plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    # plt.grid()
     plt.show()
     exit()
 
     # parse args
     opts = {
-        'episodes': 2000,
+        'episodes': 5000,
         'max_er': 20000,
         'net_h_dim': 64,
         'optimizer': 'Adam',
@@ -279,9 +281,9 @@ if __name__ == '__main__':
     }
     vis = Visdom(env='dqn_taxi')
 
-    for opt in ['Adam', 'RMSprop', 'Adamax']:
-        opts['optimizer'] = opt
-        print('optimizer = ' + opt)
+    for opt in [False, True]:
+        opts['dense_obs'] = opt
+        print('dense_obs = ' + str(opt))
 
         runs = []
         line_lb = []
@@ -311,5 +313,5 @@ if __name__ == '__main__':
         #         line_ub.append(max_line)
         #     lineplotCI(line=torch.mean(runs, dim=0), line_lb=line_lb, line_ub=line_ub)
         # vis.update_window_opts(win='eval_r', opts=dict(legend=[str(s) for s in hidden_sizes]))
-        name = 'optimizer_' + opts['optimizer'] + '.pkl'
+        name = 'dense2_' + str(opts['dense_obs']) + '.pkl'
         torch.save((opts, runs), name)

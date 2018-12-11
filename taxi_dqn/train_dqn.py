@@ -194,6 +194,7 @@ def train_model(opts):
         # print("Episode {} done. Reward: {}".format(e, cr))
 
     torch.save(net.state_dict(), opts['save_path'])
+    env.close()
     return eval_rewards
 
 
@@ -249,14 +250,14 @@ def load_and_plot(filename, smooth=False):
 
 
 if __name__ == '__main__':
-    dirlist = os.listdir('./')
-    pkl_list = [i for i in dirlist if i[:8] == 'dense2_F']
-    for filename in pkl_list:
-        load_and_plot(filename, smooth=False)
-    # plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    # plt.grid()
-    plt.show()
-    exit()
+    # dirlist = os.listdir('./')
+    # pkl_list = [i for i in dirlist if i[:8] == 'dense2_F']
+    # for filename in pkl_list:
+    #     load_and_plot(filename, smooth=False)
+    # # plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    # # plt.grid()
+    # plt.show()
+    # exit()
 
     # parse args
     opts = {

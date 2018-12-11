@@ -125,8 +125,12 @@ class ExperienceReplay(object):
 
 
 def get_screen(env):
-    screen = env.render(mode='rgb_array').transpose(
-        (2, 0, 1))  # transpose into torch order (CHW)
+    return get_screen_(env)[0]
+
+
+def get_screen_(env):
+    np_screen = env.render(mode='rgb_array')
+    screen = np_screen.transpose((2, 0, 1))  # transpose into torch order (CHW)
     # Convert to float, rescale, convert to torch tensor
     # (this doesn't require a copy)
     screen = np.ascontiguousarray(screen, dtype=np.float32) / 255
@@ -136,7 +140,7 @@ def get_screen(env):
                         T.Grayscale(),
                         T.Resize(40, interpolation=Image.CUBIC),
                         T.ToTensor()])
-    return resize(screen).unsqueeze(0).to(device)
+    return resize(screen).unsqueeze(0).to(device), np_screen
 
 
 def to_categorical(inds, dim):
@@ -263,6 +267,7 @@ def train_model(opts):
         # print("Episode {} done. Reward: {}".format(e, cr))
 
     torch.save(net.state_dict(), opts['save_path'] + '_final')
+    env.close()
     return eval_rewards
 
 

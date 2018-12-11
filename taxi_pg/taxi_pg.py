@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+import os
+import sys
 
 import torch
 from torch import nn
@@ -13,6 +15,8 @@ import numpy as np
 from tqdm import trange
 import os
 import matplotlib.pyplot as plt
+
+sys.path.insert(1, os.path.join(sys.path[0], '..'))
 from taxi_dqn.train_dqn import lineplotCI
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -211,6 +215,7 @@ def train_model(opts):
         opt.zero_grad()
 
     torch.save(net.state_dict(), opts['save_path'])
+    env.close()
     return reward_plt, total_steps_plt
 
 
@@ -251,13 +256,13 @@ def load_and_plot(filename, smooth=False):
 
 
 if __name__ == '__main__':
-    dirlist = os.listdir('./')
-    pkl_list = [i for i in dirlist if i[:8] == 'eps0_1.0']
-    for filename in pkl_list:
-        load_and_plot(filename, smooth=True)
-    # plt.legend()
-    plt.show()
-    exit()
+    # dirlist = os.listdir('./')
+    # pkl_list = [i for i in dirlist if i[:8] == 'eps0_1.0']
+    # for filename in pkl_list:
+    #     load_and_plot(filename, smooth=True)
+    # # plt.legend()
+    # plt.show()
+    # exit()
 
     # parse args
     opts = {

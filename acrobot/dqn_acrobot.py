@@ -80,14 +80,14 @@ class DQNLoss(object):
 
 
 class ExperienceReplay(object):
-    def __init__(self, max_size, success=False, suc_pr=0.5, suc_steps=5e5):
+    def __init__(self, max_size, success=False, suc_pr=0.5, suc_steps=2e5):
         self.size = max_size
         self.q = []
         if success:
             self.suc_mem = ExperienceReplay(int(0.1 * max_size))
             self.suc_pr = suc_pr
             self.suc_delta = suc_pr / suc_steps
-            self.suc_min = 0.1
+            self.suc_min = 0.2
         else:
             self.suc_mem = None
 
@@ -304,7 +304,7 @@ if __name__ == '__main__':
         'number_of_runs': 1,
         'success_exp_replay': True,
         'max_suc_len': 200,
-        'hist_len': 4,
+        'hist_len': 2,
         'double_dqn': True,
         'dueling': True,
         'env_id': '3'
